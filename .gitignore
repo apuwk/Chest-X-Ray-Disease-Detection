@@ -164,6 +164,7 @@ cython_debug/
 
 project-guide.md
 
+/notebooks
 .data_exploration.ipynb
 /Users/aksharpatel/Desktop/medical imagine classifier/Medical-Imaging-Classifier/notebooks/data_exploration.ipynb
 
@@ -180,3 +181,4 @@ checkpoints/
 
 .ipynb_checkpoints/
 *.ipynb_checkpoints
+

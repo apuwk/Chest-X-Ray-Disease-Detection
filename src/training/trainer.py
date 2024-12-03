@@ -4,7 +4,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from pathlib import Path
 import logging
-import tqdm
+from tqdm import tqdm
 import numpy as np
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
 from typing import Dict, List, Optional
