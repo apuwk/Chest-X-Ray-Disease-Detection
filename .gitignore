@@ -164,7 +164,7 @@ cython_debug/
 
 project-guide.md
 
-/notebooks
+/notebooks/
 .data_exploration.ipynb
 /Users/aksharpatel/Desktop/medical imagine classifier/Medical-Imaging-Classifier/notebooks/data_exploration.ipynb
 
