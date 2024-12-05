@@ -48,7 +48,7 @@ class XRayTrainer:
         self.model.to(self.device)
         
         # Set up loss function
-        self.criterion = criterion or nn.BCELoss()
+        self.criterion = criterion or nn.BCEWithLogitsLoss()
         
         # Set up optimizer
         self.optimizer = optimizer or optim.Adam(model.parameters(), lr=lr)
@@ -145,7 +145,7 @@ class XRayTrainer:
         for batch_idx, (images, targets) in enumerate(pbar):
 
             images = images.float().to(self.device)
-            targets = targets.float().unsqueeze(1).to(self.device)
+            targets = targets.float().to(self.device)
             
             self.optimizer.zero_grad()
             
@@ -196,7 +196,7 @@ class XRayTrainer:
             for batch_idx, (images, targets) in enumerate(pbar):
 
                 images = images.float().to(self.device)
-                targets = targets.float().unsqueeze(1).to(self.device)
+                targets = targets.float().to(self.device)
                 
                 outputs = self.model(images)
                 

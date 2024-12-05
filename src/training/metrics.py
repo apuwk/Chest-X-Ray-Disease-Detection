@@ -84,11 +84,28 @@ def calculate_multilabel_metrics(
     # Calculate accuracy
     accuracy = np.mean(binary_preds == targets)
     
+    try:
+        auc_scores = []
+        for i in range(predictions.shape[1]):  # For each class
+            try:
+                auc = roc_auc_score(targets[:, i], predictions[:, i])
+                auc_scores.append(auc)
+            except ValueError:
+                auc_scores.append(0.0)
+        mean_auc = np.mean(auc_scores)
+    except Exception as e:
+        print(f"Error calculating AUC-ROC: {str(e)}")
+        mean_auc = 0.0
+    
     return {
         'accuracy': float(accuracy),
         'precision': float(precision),
         'recall': float(recall),
-        'f1_score': float(f1)
+        'f1_score': float(f1),
+        'auc_roc': float(mean_auc)
+
+        
+        
     }
 
 def calculate_metrics(

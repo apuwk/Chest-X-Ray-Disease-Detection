@@ -78,9 +78,32 @@ class XRayPreprocessor:
         Create train/val/test splits without requiring stratification
         """
         try:
+            findings_dict = {
+                'Atelectasis': 0,
+                'Cardiomegaly': 1,
+                'Effusion': 2,
+                'Infiltration': 3,
+                'Mass': 4,
+                'Nodule': 5,
+                'Pneumonia': 6,
+                'Pneumothorax': 7,
+                'Consolidation': 8,
+                'Edema': 9,
+                'Emphysema': 10,
+                'Fibrosis': 11,
+                'Pleural_Thickening': 12,
+                'Hernia': 13
+            }
+            
             all_images = metadata_df['Image Index'].values
-            all_labels = metadata_df['Finding Labels'].values
-            binary_labels = np.array([1 if 'Pneumonia' in label else 0 for label in all_labels], dtype=int)
+            all_labels = metadata_df['Finding Labels']
+            
+            label_matrix = np.zeros((len(all_labels), len(findings_dict)))
+            
+            for finding, idx in findings_dict.items():
+                label_matrix[:, idx] = all_labels.str.contains(f'\\b{finding}\\b').astype(int)
+                    
+            binary_labels = label_matrix.astype(np.float32)
             
             # First split: train vs temp (validation + test)
             try:
@@ -136,11 +159,12 @@ class XRayPreprocessor:
             self.logger.info(f"Train set size: {len(image_splits['train'])}")
             self.logger.info(f"Validation set size: {len(image_splits['val'])}")
             self.logger.info(f"Test set size: {len(image_splits['test'])}")
-            
-            
+                        
             return image_splits, label_splits
                 
         except Exception as e:
             self.logger.error(f"Error creating splits: {str(e)}")
             print(f"Detailed error: {e}")  # Add this line
             return None
+        
+   

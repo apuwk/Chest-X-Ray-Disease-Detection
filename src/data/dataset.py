@@ -37,5 +37,4 @@ class ChestXrayDataset(Dataset):
         if self.transform:
             image = self.transform(image)
 
-
         return image, label
