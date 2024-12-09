@@ -163,6 +163,7 @@ cython_debug/
 
 
 project-guide.md
+updated_project-guide.md
 
 /notebooks/
 .data_exploration.ipynb
