@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image
 import logging
 from sklearn.model_selection import train_test_split
+import cv2
 
 class XRayPreprocessor:
     def __init__(self, 
@@ -47,28 +48,64 @@ class XRayPreprocessor:
 
     def preprocess_image(self, image):
         """
-        Preprocess single image
+        Enhanced preprocessing pipeline for X-ray images
         """
-        
-        # You might want to add a check if image is None
-        if image is None:
-            return None
         try:
+            if isinstance(image, Image.Image):
+                img_array = np.array(image)
+            else:
+                img_array = image
+
+            if len(img_array.shape) == 3:
+                img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            img_array = clahe.apply(img_array.astype(np.uint8))
+
+            _, thresh = cv2.threshold(img_array, 30, 255, cv2.THRESH_BINARY)
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
-            if image.size != (224, 224):    
-                image = image.resize(self.target_size)
+            if contours:
+                largest_contour = max(contours, key=cv2.contourArea)
+                x, y, w, h = cv2.boundingRect(largest_contour)
+                
+                margin = 50
+                x = max(0, x - margin)
+                y = max(0, y - margin)
+                w = min(img_array.shape[1] - x, w + 2*margin)
+                h = min(img_array.shape[0] - y, h + 2*margin)
+                
+                img_array = img_array[y:y+h, x:x+w]
+
+            target_size = self.target_size[0]
+            aspect_ratio = img_array.shape[1] / img_array.shape[0]
             
-            img_array = np.array(image)
-            
-            if self.normalize_method == 'standard':
-                img_array = img_array / 255.0
-            elif self.normalize_method == 'minmax':
-                img_array = (img_array - 127.5) / 127.5
-            
+            if aspect_ratio > 1:
+                new_width = target_size
+                new_height = int(target_size / aspect_ratio)
+            else:
+                new_height = target_size
+                new_width = int(target_size * aspect_ratio)
+                
+            img_array = cv2.resize(img_array, (new_width, new_height))
+
+            delta_w = target_size - new_width
+            delta_h = target_size - new_height
+            top, bottom = delta_h//2, delta_h-(delta_h//2)
+            left, right = delta_w//2, delta_w-(delta_w//2)
+            img_array = cv2.copyMakeBorder(img_array, top, bottom, left, right, 
+                                        cv2.BORDER_CONSTANT, value=0)
+
+            p5 = np.percentile(img_array, 5)
+            p95 = np.percentile(img_array, 95)
+            img_array = (img_array - p5) / (p95 - p5)
+            img_array = np.clip(img_array, 0, 1)
+
+            img_array = np.stack([img_array] * 3, axis=-1)
             img_array = np.transpose(img_array, (2, 0, 1))
 
             return img_array
-            
+
         except Exception as e:
             self.logger.error(f"Error preprocessing image: {str(e)}")
             return None

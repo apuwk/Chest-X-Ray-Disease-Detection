@@ -8,8 +8,9 @@ from tqdm import tqdm
 import numpy as np
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
 from typing import Dict, List, Optional
-from src.models.cnn import ChestXrayModel
+from src.models.cnn import ChestXrayModel, FocalLoss
 import src.training.metrics as metrics
+
 
 class XRayTrainer:
     def __init__(
@@ -44,12 +45,12 @@ class XRayTrainer:
         self.num_classes = num_classes
         
         # Set up device
-        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = device or torch.device('mps' if torch.mps.is_available() else 'cpu')
         self.model.to(self.device)
         
         # Set up loss function
-        self.criterion = criterion or nn.BCEWithLogitsLoss()
         
+        self.criterion = criterion or FocalLoss()
         # Set up optimizer
         self.optimizer = optimizer or optim.Adam(model.parameters(), lr=lr)
         
@@ -120,7 +121,7 @@ class XRayTrainer:
             
             # Early stopping check
             if patience_counter >= early_stopping_patience:
-                self.logger.info(f"Early stopping triggered after epoch {epoch+1}")
+                self.logger.info(f"Early stopping triggered after epoch {epoch}")
                 break
         
         self.logger.info("Training completed!")
@@ -150,7 +151,7 @@ class XRayTrainer:
             self.optimizer.zero_grad()
             
             outputs = self.model(images)
-            
+
             loss = self.criterion(outputs, targets)
             
             loss.backward()
@@ -269,7 +270,7 @@ class XRayTrainer:
             self.logger.info(f"Checkpoint saved: {checkpoint_name}")
             
             # Optionally, remove old checkpoints to save space
-            self._cleanup_old_checkpoints()
+            # self._cleanup_old_checkpoints()
         except Exception as e:
             self.logger.error(f"Error saving checkpoint: {str(e)}")
 
