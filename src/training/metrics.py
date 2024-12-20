@@ -102,8 +102,8 @@ def calculate_multilabel_metrics(
         )
         
         # Calculate accuracy (exact match)
-        accuracy = np.mean(np.all(binary_preds == targets, axis=1))
-        
+        accuracy = np.mean(binary_preds == targets)   
+             
         # Calculate AUC-ROC for multi-label
         try:
             auc_roc = roc_auc_score(targets, predictions, average='macro', multi_class='ovr')

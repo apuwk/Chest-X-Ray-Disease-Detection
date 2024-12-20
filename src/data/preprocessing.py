@@ -20,14 +20,11 @@ class XRayPreprocessor:
         self.test_split = test_split
         self.random_seed = random_seed
         
-        # Set up logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
     def load_image(self, folder_path, image_path):
-        """
-        Load and validate image
-        """
+        """Load and validate image"""
         try:
             image_path = Path(folder_path) / image_path
             
@@ -46,10 +43,8 @@ class XRayPreprocessor:
             self.logger.error(f"Error loading image {image_path}: {str(e)}")
             return None
 
-    def preprocess_image(self, image):
-        """
-        Enhanced preprocessing pipeline for X-ray images
-        """
+    def preprocess_image(self, image, is_local_view=False):
+        """Enhanced preprocessing pipeline for X-ray images"""
         try:
             if isinstance(image, Image.Image):
                 img_array = np.array(image)
@@ -59,7 +54,11 @@ class XRayPreprocessor:
             if len(img_array.shape) == 3:
                 img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
 
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            # Apply CLAHE with different parameters for local view
+            if is_local_view:
+                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4,4))  # Stronger contrast for local
+            else:
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
             img_array = clahe.apply(img_array.astype(np.uint8))
 
             _, thresh = cv2.threshold(img_array, 30, 255, cv2.THRESH_BINARY)
@@ -69,7 +68,8 @@ class XRayPreprocessor:
                 largest_contour = max(contours, key=cv2.contourArea)
                 x, y, w, h = cv2.boundingRect(largest_contour)
                 
-                margin = 50
+                # Different margins for global and local views
+                margin = 30 if is_local_view else 50
                 x = max(0, x - margin)
                 y = max(0, y - margin)
                 w = min(img_array.shape[1] - x, w + 2*margin)
@@ -96,11 +96,17 @@ class XRayPreprocessor:
             img_array = cv2.copyMakeBorder(img_array, top, bottom, left, right, 
                                         cv2.BORDER_CONSTANT, value=0)
 
-            p5 = np.percentile(img_array, 5)
-            p95 = np.percentile(img_array, 95)
-            img_array = (img_array - p5) / (p95 - p5)
+            # Different normalization for local view
+            if is_local_view:
+                p2 = np.percentile(img_array, 2)
+                p98 = np.percentile(img_array, 98)
+                img_array = (img_array - p2) / (p98 - p2)
+            else:
+                p5 = np.percentile(img_array, 5)
+                p95 = np.percentile(img_array, 95)
+                img_array = (img_array - p5) / (p95 - p5)
+            
             img_array = np.clip(img_array, 0, 1)
-
             img_array = np.stack([img_array] * 3, axis=-1)
             img_array = np.transpose(img_array, (2, 0, 1))
 
@@ -109,6 +115,25 @@ class XRayPreprocessor:
         except Exception as e:
             self.logger.error(f"Error preprocessing image: {str(e)}")
             return None
+
+    def create_multiscale_input(self, image):
+        """Create global and local views of the image"""
+        try:
+            # Get global view
+            global_view = self.preprocess_image(image, is_local_view=False)
+            if global_view is None:
+                return None, None
+
+            # Create zoomed local view
+            local_view = self.preprocess_image(image, is_local_view=True)
+            if local_view is None:
+                return global_view, global_view  # Fallback to global view
+
+            return global_view, local_view
+
+        except Exception as e:
+            self.logger.error(f"Error creating multi-scale input: {str(e)}")
+            return None, None
 
     def create_splits(self, metadata_df):
         """
@@ -196,12 +221,10 @@ class XRayPreprocessor:
             self.logger.info(f"Train set size: {len(image_splits['train'])}")
             self.logger.info(f"Validation set size: {len(image_splits['val'])}")
             self.logger.info(f"Test set size: {len(image_splits['test'])}")
-                        
+            
             return image_splits, label_splits
-                
+                    
         except Exception as e:
             self.logger.error(f"Error creating splits: {str(e)}")
             print(f"Detailed error: {e}")  # Add this line
             return None
-        
-   

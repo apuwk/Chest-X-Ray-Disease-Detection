@@ -5,38 +5,16 @@ import torch.nn.functional as F
 from .attention import CBAM
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2):
+    def __init__(self, alpha=1, gamma=2):
         super().__init__()
+        self.alpha = alpha
         self.gamma = gamma
         
-        self.alpha_pos = torch.tensor([
-            2.7808, 2.9208, 2.7749, 2.6414, 2.9183,
-            2.8821, 2.9722, 2.9082, 2.9116, 2.9663,
-            2.9540, 2.9465, 2.9285, 2.9943
-        ])
-        # Negative class weights (when condition is absent)
-        self.alpha_neg = 1.0 - self.alpha_pos/3.0  # Example weighting scheme
-
     def forward(self, inputs, targets):
-        self.alpha_pos = self.alpha_pos.to(inputs.device)
-        self.alpha_neg = self.alpha_neg.to(inputs.device)
-        
         bce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-
-        eps = 1e-7
-        
-        inputs_sigmoid = torch.sigmoid(inputs)
-        pt = targets * inputs_sigmoid + (1 - targets) * (1 - inputs_sigmoid)
-        pt = torch.clamp(pt, min=eps, max=1-eps)
-        
-        # Apply different weights for positive and negative cases
-        alpha_t = targets * self.alpha_pos[None, :] + (1 - targets) * self.alpha_neg[None, :]
-        
-        focal_weight = (1 - pt) ** self.gamma
-        focal_loss = alpha_t * focal_weight * bce_loss
-        
+        pt = torch.exp(-bce_loss)
+        focal_loss = self.alpha * (1-pt)**self.gamma * bce_loss
         return focal_loss.mean()
-
 
 class SimpleFPN(nn.Module):
     def __init__(self, in_channels_list, out_channels=256):
@@ -55,87 +33,112 @@ class SimpleFPN(nn.Module):
 class ChestXrayModel(nn.Module):
     def __init__(self, num_classes=14, pretrained=True):
         super().__init__()
-        self.resnet = models.resnet50(weights='IMAGENET1K_V1' if pretrained else None)
+        # Base ResNet for global features
+        self.resnet_global = models.resnet50(weights='IMAGENET1K_V1' if pretrained else None)
         
-        # Get intermediate features
-        self.feature_channels = [256, 512, 1024, 2048]  # ResNet50 channel sizes
+        # ResNet for local (zoomed) features
+        self.resnet_local = models.resnet50(weights='IMAGENET1K_V1' if pretrained else None)
         
-        # Add FPN
-        self.fpn = SimpleFPN(self.feature_channels)
+        # Get feature channels for both paths
+        self.feature_channels = [256, 512, 1024, 2048]
         
-        # Multiple CBAM modules for different scales
-        self.cbam_modules = nn.ModuleList([
-            CBAM(256) for _ in range(4)  # One for each FPN level
+        # FPN for both paths
+        self.fpn_global = SimpleFPN(self.feature_channels)
+        self.fpn_local = SimpleFPN(self.feature_channels)
+        
+        # CBAM modules for different scales (global path)
+        self.cbam_global = nn.ModuleList([
+            CBAM(256) for _ in range(4)
+        ])
+        
+        # CBAM modules for different scales (local path)
+        self.cbam_local = nn.ModuleList([
+            CBAM(256) for _ in range(4)
         ])
         
         # Global pooling
         self.gap = nn.AdaptiveAvgPool2d(1)
         
-        # Enhanced classifier
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(256 * 4, 512),
+        # Feature fusion
+        self.fusion = nn.Sequential(
+            nn.Linear(256 * 8, 1024),  # 8 = 4 scales * 2 paths
             nn.ReLU(inplace=True),
             nn.Dropout(0.5),
-            nn.Linear(512, num_classes)
+            nn.Linear(1024, 512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3)
         )
+        
+        # Final classifier
+        self.classifier = nn.Linear(512, num_classes)
 
-    def forward(self, x):
-        # Get intermediate features
+    def _get_resnet_features(self, x, resnet):
         features = []
-        x = self.resnet.conv1(x)
-        x = self.resnet.bn1(x)
-        x = self.resnet.relu(x)
-        x = self.resnet.maxpool(x)
+        x = resnet.conv1(x)
+        x = resnet.bn1(x)
+        x = resnet.relu(x)
+        x = resnet.maxpool(x)
 
-        x = self.resnet.layer1(x)
+        x = resnet.layer1(x)
         features.append(x)
-        x = self.resnet.layer2(x)
+        x = resnet.layer2(x)
         features.append(x)
-        x = self.resnet.layer3(x)
+        x = resnet.layer3(x)
         features.append(x)
-        x = self.resnet.layer4(x)
+        x = resnet.layer4(x)
         features.append(x)
+        
+        return features
 
+    def forward(self, x_global, x_local):
+        # Get features from both paths
+        global_features = self._get_resnet_features(x_global, self.resnet_global)
+        local_features = self._get_resnet_features(x_local, self.resnet_local)
+        
         # Apply FPN
-        fpn_features = self.fpn(features)
+        global_fpn = self.fpn_global(global_features)
+        local_fpn = self.fpn_local(local_features)
         
-        # Apply CBAM at each scale
-        attended_features = []
-        for feat, cbam in zip(fpn_features, self.cbam_modules):
+        # Apply CBAM and pooling for global path
+        global_attended = []
+        for feat, cbam in zip(global_fpn, self.cbam_global):
             attended = cbam(feat)
-            pool = self.gap(attended)
-            attended_features.append(pool)
+            pooled = self.gap(attended)
+            global_attended.append(pooled)
         
-        # Concatenate all scales
-        multi_scale = torch.cat(attended_features, dim=1)
+        # Apply CBAM and pooling for local path
+        local_attended = []
+        for feat, cbam in zip(local_fpn, self.cbam_local):
+            attended = cbam(feat)
+            pooled = self.gap(attended)
+            local_attended.append(pooled)
         
-        # Classification
-        output = self.classifier(multi_scale)
+        # Concatenate all scales from both paths
+        multi_scale = torch.cat(global_attended + local_attended, dim=1)
+        multi_scale = torch.flatten(multi_scale, 1)
+        
+        # Fusion and classification
+        fused = self.fusion(multi_scale)
+        output = self.classifier(fused)
         return output
 
-    def get_attention_maps(self, x):
-        # Modified to return attention maps from all scales
-        features = []
-        x = self.resnet.conv1(x)
-        x = self.resnet.bn1(x)
-        x = self.resnet.relu(x)
-        x = self.resnet.maxpool(x)
-
-        x = self.resnet.layer1(x)
-        features.append(x)
-        x = self.resnet.layer2(x)
-        features.append(x)
-        x = self.resnet.layer3(x)
-        features.append(x)
-        x = self.resnet.layer4(x)
-        features.append(x)
-
-        fpn_features = self.fpn(features)
-        attention_maps = {}
+    def get_attention_maps(self, x_global, x_local):
+        attention_maps = {'global': {}, 'local': {}}
         
-        for i, (feat, cbam) in enumerate(zip(fpn_features, self.cbam_modules)):
-            attention_maps[f'scale_{i}'] = {
+        # Get global features and attention maps
+        global_features = self._get_resnet_features(x_global, self.resnet_global)
+        global_fpn = self.fpn_global(global_features)
+        for i, (feat, cbam) in enumerate(zip(global_fpn, self.cbam_global)):
+            attention_maps['global'][f'scale_{i}'] = {
+                'feature': feat,
+                'attention': cbam(feat)
+            }
+            
+        # Get local features and attention maps
+        local_features = self._get_resnet_features(x_local, self.resnet_local)
+        local_fpn = self.fpn_local(local_features)
+        for i, (feat, cbam) in enumerate(zip(local_fpn, self.cbam_local)):
+            attention_maps['local'][f'scale_{i}'] = {
                 'feature': feat,
                 'attention': cbam(feat)
             }

@@ -1,7 +1,7 @@
 # Chest X-Ray Analysis Project
 
 ## Overview
-This project implements a deep learning system for analyzing chest X-ray images, with a primary focus on pneumonia detection and multi-label classification of various thoracic conditions. The system utilizes state-of-the-art deep learning techniques including attention mechanisms, feature pyramid networks, and advanced visualization tools.
+This project implements a deep learning system for analyzing chest X-ray images, with a primary focus on multi-label classification of various thoracic conditions. The system utilizes state-of-the-art deep learning techniques including attention mechanisms, feature pyramid networks, and advanced visualization tools.
 
 ## Key Features
 - Multi-label classification of 14 different thoracic conditions

@@ -8,9 +8,8 @@ from tqdm import tqdm
 import numpy as np
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
 from typing import Dict, List, Optional
-from src.models.cnn import ChestXrayModel, FocalLoss
+from src.models.cnn import ChestXrayModel
 import src.training.metrics as metrics
-
 
 class XRayTrainer:
     def __init__(
@@ -18,39 +17,25 @@ class XRayTrainer:
         model: ChestXrayModel,
         train_loader: DataLoader,
         val_loader: DataLoader,
-        num_classes: int = 1,
+        num_classes: int = 14,
         criterion: Optional[nn.Module] = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
         lr: float = 1e-4,
         device: Optional[torch.device] = None,
         checkpoint_dir: str = 'checkpoints'
     ):
-        """
-        Initialize the X-Ray model trainer.
-        
-        Args:
-            model: The neural network model to train
-            train_loader: DataLoader for training data
-            val_loader: DataLoader for validation data
-            num_classes: Number of classes (default=1 for binary classification)
-            criterion: Loss function (defaults to BCELoss)
-            optimizer: Optimizer (defaults to Adam)
-            lr: Learning rate for optimizer if not provided
-            device: Device to train on (defaults to GPU if available)
-            checkpoint_dir: Directory to save model checkpoints
-        """
         self.model = model
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.num_classes = num_classes
         
         # Set up device
-        self.device = device or torch.device('mps' if torch.mps.is_available() else 'cpu')
+        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model.to(self.device)
         
         # Set up loss function
+        self.criterion = criterion or nn.BCEWithLogitsLoss()
         
-        self.criterion = criterion or FocalLoss()
         # Set up optimizer
         self.optimizer = optimizer or optim.Adam(model.parameters(), lr=lr)
         
@@ -77,16 +62,6 @@ class XRayTrainer:
         num_epochs: int, 
         early_stopping_patience: int = 5
     ) -> Dict[str, float]:
-        """
-        Main training loop.
-        
-        Args:
-            num_epochs: Number of epochs to train
-            early_stopping_patience: Number of epochs to wait before early stopping
-            
-        Returns:
-            Dict containing best metrics
-        """
         best_val_loss = float('inf')
         best_metrics = {}
         patience_counter = 0
@@ -121,19 +96,15 @@ class XRayTrainer:
             
             # Early stopping check
             if patience_counter >= early_stopping_patience:
-                self.logger.info(f"Early stopping triggered after epoch {epoch}")
+                self.logger.info(f"Early stopping triggered after epoch {epoch+1}")
                 break
         
         self.logger.info("Training completed!")
         return best_metrics
         
-        
     def _train_epoch(self) -> Dict[str, float]:
         """
         Trains the model for one epoch.
-        
-        Returns:
-            Dict containing training metrics for this epoch
         """
         self.model.train()
         
@@ -143,15 +114,15 @@ class XRayTrainer:
         
         pbar = tqdm(self.train_loader, desc='Training')
         
-        for batch_idx, (images, targets) in enumerate(pbar):
-
-            images = images.float().to(self.device)
+        for batch_idx, ((images_global, images_local), targets) in enumerate(pbar):
+            images_global = images_global.float().to(self.device)
+            images_local = images_local.float().to(self.device)
             targets = targets.float().to(self.device)
             
             self.optimizer.zero_grad()
             
-            outputs = self.model(images)
-
+            outputs = self.model(images_global, images_local)
+            
             loss = self.criterion(outputs, targets)
             
             loss.backward()
@@ -177,13 +148,9 @@ class XRayTrainer:
         
         return metrics
             
-    
     def _validate_epoch(self) -> Dict[str, float]:
         """
         Validates the model for one epoch.
-        
-        Returns:
-            Dict containing validation metrics for this epoch
         """
         self.model.eval()
         
@@ -194,12 +161,12 @@ class XRayTrainer:
         with torch.no_grad():
             pbar = tqdm(self.val_loader, desc='Validation')
             
-            for batch_idx, (images, targets) in enumerate(pbar):
-
-                images = images.float().to(self.device)
+            for batch_idx, ((images_global, images_local), targets) in enumerate(pbar):
+                images_global = images_global.float().to(self.device)
+                images_local = images_local.float().to(self.device)
                 targets = targets.float().to(self.device)
                 
-                outputs = self.model(images)
+                outputs = self.model(images_global, images_local)
                 
                 loss = self.criterion(outputs, targets)
                 
@@ -222,7 +189,6 @@ class XRayTrainer:
         
         return metrics
         
-        
     def _calculate_metrics(
         self,
         predictions: np.ndarray,
@@ -230,20 +196,12 @@ class XRayTrainer:
     ) -> Dict[str, float]:
        return metrics.calculate_metrics(predictions, targets, self.num_classes)
 
-
     def _save_checkpoint(
         self,
         epoch: int,
         metrics: Dict[str, float]
     ) -> None:
-        """
-        Save model checkpoint along with training info.
-        
-        Args:
-            epoch: Current epoch number
-            metrics: Dictionary containing current metrics
-        """
-        # Create checkpoint filename with metrics
+        """Save model checkpoint along with training info."""
         f1_score = metrics.get('f1_score', 0)
         auc_roc = metrics.get('auc_roc', 0)
         
@@ -255,7 +213,6 @@ class XRayTrainer:
         
         checkpoint_path = self.checkpoint_dir / checkpoint_name
         
-        # Prepare checkpoint dictionary
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
@@ -264,28 +221,19 @@ class XRayTrainer:
             'num_classes': self.num_classes,
         }
         
-        # Save checkpoint
         try:
             torch.save(checkpoint, checkpoint_path)
             self.logger.info(f"Checkpoint saved: {checkpoint_name}")
             
-            # Optionally, remove old checkpoints to save space
             # self._cleanup_old_checkpoints()
         except Exception as e:
             self.logger.error(f"Error saving checkpoint: {str(e)}")
 
     def _cleanup_old_checkpoints(self, keep_n: int = 3) -> None:
-        """
-        Remove old checkpoints, keeping only the n most recent ones.
-        
-        Args:
-            keep_n: Number of checkpoints to keep
-        """
+        """Remove old checkpoints, keeping only the n most recent ones."""
         checkpoints = list(self.checkpoint_dir.glob("checkpoint_*.pt"))
         if len(checkpoints) > keep_n:
-            # Sort by creation time
             checkpoints.sort(key=lambda x: x.stat().st_mtime)
-            # Remove oldest checkpoints
             for checkpoint in checkpoints[:-keep_n]:
                 checkpoint.unlink()
                 self.logger.info(f"Removed old checkpoint: {checkpoint.name}")
