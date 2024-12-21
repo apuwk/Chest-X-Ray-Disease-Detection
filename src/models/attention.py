@@ -58,31 +58,48 @@ class SpatialAttention(nn.Module):
         return self.sigmoid(attention)
 
 class CBAM(nn.Module):
-    def __init__(self, in_channels, reduction_ratio=16, spatial_kernel=7):
+    def __init__(self, in_channels, reduction_ratio=16):
         super().__init__()
-        self.channel_attention = ChannelAttention(in_channels, reduction_ratio)
-        self.spatial_attention = SpatialAttention(spatial_kernel)
         
-        # Add global context
-        self.global_context = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(in_channels, in_channels//reduction_ratio, 1),
+        # Channel Attention with extra processing
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        
+        # Deeper channel attention
+        self.channel_attention = nn.Sequential(
+            nn.Linear(in_channels, in_channels // reduction_ratio),
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels//reduction_ratio, in_channels, 1),
+            nn.Linear(in_channels // reduction_ratio, in_channels // reduction_ratio),
+            nn.ReLU(inplace=True),
+            nn.Linear(in_channels // reduction_ratio, in_channels),
+            nn.Sigmoid()
+        )
+        
+        # Spatial Attention with more channels
+        self.spatial_conv = nn.Sequential(
+            nn.Conv2d(2, 8, kernel_size=7, padding=3),
+            nn.BatchNorm2d(8),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(8, 1, kernel_size=7, padding=3),
+            nn.BatchNorm2d(1),
             nn.Sigmoid()
         )
 
     def forward(self, x):
-        # Apply channel attention
-        ca = self.channel_attention(x)
-        x = x * ca
+        # Channel attention
+        avg_pool = self.avg_pool(x)
+        max_pool = self.max_pool(x)
         
-        # Apply spatial attention
-        sa = self.spatial_attention(x)
-        x = x * sa
+        avg_out = self.channel_attention(avg_pool.view(avg_pool.size(0), -1))
+        max_out = self.channel_attention(max_pool.view(max_pool.size(0), -1))
         
-        # Add global context
-        gc = self.global_context(x)
-        x = x * gc
+        channel_out = (avg_out + max_out).view(x.size(0), x.size(1), 1, 1)
+        x = x * channel_out
         
-        return x
+        # Spatial attention
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        spatial_in = torch.cat([avg_out, max_out], dim=1)
+        spatial_out = self.spatial_conv(spatial_in)
+        
+        return x * spatial_out
