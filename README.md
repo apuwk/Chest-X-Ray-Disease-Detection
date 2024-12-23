@@ -152,18 +152,6 @@ best_metrics = trainer.train(
 )
 ```
 
-## Model Performance
-Current performance metrics:
-- Overall Accuracy: 0.2883
-- Overall F1 Score: 0.1169
-- Overall Precision: 0.1066
-- Overall Recall: 0.1817
-
-Best performing conditions:
-1. Infiltration (F1: 0.3493)
-2. Effusion (F1: 0.3087)
-3. Atelectasis (F1: 0.2239)
-
 ## Future Improvements
 - Implement mixed precision training
 - Optimize training speed
